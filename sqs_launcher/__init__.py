@@ -27,7 +27,8 @@ sqs_logger = logging.getLogger('sqs_listener')
 
 class SqsLauncher(object):
 
-    def __init__(self, queue=None, queue_url=None, create_queue=False, visibility_timeout='600', serializer=json.dumps):
+    def __init__(self, queue=None, queue_url=None, create_queue=False, visibility_timeout='600', serializer=json.dumps,
+                 region_name=None):
         """
         :param queue: (str) name of queue to listen to
         :param queue_url: (str) url of queue to listen to
@@ -37,6 +38,7 @@ class SqsLauncher(object):
                                     Typically this should reflect the maximum amount of time your handler method will take
                                     to finish execution. See http://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-visibility-timeout.html
                                     for more information
+        :param: region_name: manually set region name
         """
         if not any([queue, queue_url]):
             raise ValueError('Either `queue` or `queue_url` should be provided.')
@@ -49,7 +51,8 @@ class SqsLauncher(object):
         
         # new session for each instantiation
         self._session = boto3.session.Session()
-        self._client = self._session.client('sqs')
+        self._region_name = region_name or self._session.region_name
+        self._client = self._session.client('sqs', region_name=self._region_name)
 
         self._queue_name = queue
         self._queue_url = queue_url
