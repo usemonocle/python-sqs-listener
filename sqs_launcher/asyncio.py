@@ -24,7 +24,7 @@ import aioboto3
 sqs_logger = logging.getLogger('sqs_listener')
 
 
-class SqsLauncher(object):
+class AsyncSqsLauncher(object):
 
     def __init__(self, queue=None, queue_url=None, create_queue=False, visibility_timeout='600', serializer=json.dumps,
                  region_name=None):
