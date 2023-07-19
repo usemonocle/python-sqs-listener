@@ -21,7 +21,7 @@ import aioboto3
 # start class
 # ================
 
-sqs_logger = logging.getLogger('sqs_listener')
+sqs_logger = logging.getLogger('async_sqs_listener')
 
 
 class AsyncSqsLauncher(object):
@@ -57,8 +57,9 @@ class AsyncSqsLauncher(object):
         self._serializer = serializer
         self._create_queue = create_queue
         self._visibility_timeout = visibility_timeout
+        self._is_init = False
 
-    async def init(self):
+    async def _init(self):
         if not self._queue_url:
             async with self._session.client('sqs', region_name=self._region_name) as sqs:
                 queues = await sqs.list_queues(QueueNamePrefix=self._queue_name)
@@ -82,6 +83,7 @@ class AsyncSqsLauncher(object):
                         raise ValueError('No queue found with name ' + self._queue_name)
         else:
             self._queue_name = self._get_queue_name_from_url(self._queue_url)
+        self._is_init = True
 
     async def launch_message(self, message, **kwargs):
         """
@@ -93,6 +95,8 @@ class AsyncSqsLauncher(object):
         """
         sqs_logger.info("Sending message to queue " + self._queue_name)
         async with self._session.client('sqs', region_name=self._region_name) as sqs:
+            if not self._is_init:
+                await self._init()
             return await sqs.send_message(
                 QueueUrl=self._queue_url,
                 MessageBody=self._serializer(message),
