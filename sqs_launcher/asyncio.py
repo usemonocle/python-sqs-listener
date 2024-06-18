@@ -42,13 +42,6 @@ class AsyncSqsLauncher(object):
         if not any([queue, queue_url]):
             raise ValueError('Either `queue` or `queue_url` should be provided.')
 
-        if (
-                not os.environ.get('AWS_ACCOUNT_ID', None) and
-                not (aioboto3.Session().get_credentials().method in ['iam-role', 'assume-role',
-                                                                     'assume-role-with-web-identity'])
-        ):
-            raise EnvironmentError('Environment variable `AWS_ACCOUNT_ID` not set and no role found.')
-
         # new session for each instantiation
         self._session = aioboto3.session.Session()
         self._region_name = region_name or self._session.region_name
@@ -60,6 +53,13 @@ class AsyncSqsLauncher(object):
         self._is_init = False
 
     async def _init(self):
+        if (
+                not os.environ.get('AWS_ACCOUNT_ID', None) and
+                not ((await self._session.get_credentials()).method in ['iam-role', 'assume-role',
+                                                                        'assume-role-with-web-identity'])
+        ):
+            raise EnvironmentError('Environment variable `AWS_ACCOUNT_ID` not set and no role found.')
+
         if not self._queue_url:
             async with self._session.client('sqs', region_name=self._region_name) as sqs:
                 queues = await sqs.list_queues(QueueNamePrefix=self._queue_name)
