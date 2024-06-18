@@ -58,6 +58,7 @@ class AsyncSqsListener(object):
         self._wait_time = kwargs.get('wait_time', 0)
         self._max_number_of_messages = kwargs.get('max_number_of_messages', 1)
         self._deserializer = kwargs.get("deserializer", json.loads)
+        self._max_parallel_semaphore = asyncio.Semaphore(kwargs.get('max_messages_parallelism', 1000))
 
         # must come last
         if boto3_session:
@@ -131,8 +132,11 @@ class AsyncSqsListener(object):
             yield sqs
 
     async def _start_listening(self, client):
-        # TODO consider incorporating output processing from here: https://github.com/debrouwere/sqs-antenna/blob/master/antenna/__init__.py
         while True:
+            # If max parallelism is exceeded, we'll block here until we can acquire it
+            await self._max_parallel_semaphore.acquire()
+            self._max_parallel_semaphore.release()
+
             # calling with WaitTimeSecconds of zero show the same behavior as
             # not specifiying a wait time, ie: short polling
             messages = await client.receive_message(
@@ -143,54 +147,57 @@ class AsyncSqsListener(object):
                 MaxNumberOfMessages=self._max_number_of_messages
             )
             if 'Messages' in messages:
-
                 sqs_logger.debug(messages)
                 sqs_logger.info("{} messages received".format(len(messages['Messages'])))
                 for m in messages['Messages']:
-                    receipt_handle = m['ReceiptHandle']
-                    m_body = m['Body']
-                    message_attribs = None
-                    attribs = None
-
-                    try:
-                        deserialized = self._deserializer(m_body)
-                    except:
-                        sqs_logger.exception("Unable to parse message")
-                        continue
-
-                    if 'MessageAttributes' in m:
-                        message_attribs = m['MessageAttributes']
-                    if 'Attributes' in m:
-                        attribs = m['Attributes']
-                    try:
-                        if self._force_delete:
-                            await client.delete_message(
-                                QueueUrl=self._queue_url,
-                                ReceiptHandle=receipt_handle
-                            )
-                            await self.handle_message(deserialized, message_attribs, attribs)
-                        else:
-                            await self.handle_message(deserialized, message_attribs, attribs)
-                            await client.delete_message(
-                                QueueUrl=self._queue_url,
-                                ReceiptHandle=receipt_handle
-                            )
-                    except Exception as ex:
-                        sqs_logger.exception(ex)
-                        if self._error_queue_name:
-                            exc_type, exc_obj, exc_tb = sys.exc_info()
-
-                            sqs_logger.info("Pushing exception to error queue")
-                            error_launcher = SqsLauncher(queue=self._error_queue_name, create_queue=True)
-                            error_launcher.launch_message(
-                                {
-                                    'exception_type': str(exc_type),
-                                    'error_message': str(ex.args)
-                                }
-                            )
-
+                    task = asyncio.create_task(self.process_message(m, client))
+                    task.add_done_callback(self._handle_task_result)
             else:
                 await asyncio.sleep(self._poll_interval)
+
+    async def process_message(self, m, client):
+        with self._max_parallel_semaphore:
+            receipt_handle = m['ReceiptHandle']
+            m_body = m['Body']
+            message_attribs = None
+            attribs = None
+
+            try:
+                deserialized = self._deserializer(m_body)
+            except:
+                sqs_logger.exception("Unable to parse message")
+                return
+
+            if 'MessageAttributes' in m:
+                message_attribs = m['MessageAttributes']
+            if 'Attributes' in m:
+                attribs = m['Attributes']
+            try:
+                if self._force_delete:
+                    await client.delete_message(
+                        QueueUrl=self._queue_url,
+                        ReceiptHandle=receipt_handle
+                    )
+                    await self.handle_message(deserialized, message_attribs, attribs)
+                else:
+                    await self.handle_message(deserialized, message_attribs, attribs)
+                    await client.delete_message(
+                        QueueUrl=self._queue_url,
+                        ReceiptHandle=receipt_handle
+                    )
+            except Exception as ex:
+                sqs_logger.exception(ex)
+                if self._error_queue_name:
+                    exc_type, exc_obj, exc_tb = sys.exc_info()
+
+                    sqs_logger.info("Pushing exception to error queue")
+                    error_launcher = SqsLauncher(queue=self._error_queue_name, create_queue=True)
+                    error_launcher.launch_message(
+                        {
+                            'exception_type': str(exc_type),
+                            'error_message': str(ex.args)
+                        }
+                    )
 
     async def listen(self):
         async with self._initialize_client() as client:
@@ -212,6 +219,13 @@ class AsyncSqsListener(object):
 
         sh.setFormatter(formatter)
         logger.addHandler(sh)
+
+    def _handle_task_result(self, task):
+        """This function prevents silent failure in case of uncaught exceptions in tasks"""
+        try:
+            task.result()
+        except Exception as e:
+            sqs_logger.exception("Task failed with exception: %s", e)
 
     @abstractmethod
     async def handle_message(self, body, attributes, messages_attributes):
