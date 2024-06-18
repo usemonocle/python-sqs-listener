@@ -156,7 +156,7 @@ class AsyncSqsListener(object):
                 await asyncio.sleep(self._poll_interval)
 
     async def process_message(self, m, client):
-        with self._max_parallel_semaphore:
+        async with self._max_parallel_semaphore:
             receipt_handle = m['ReceiptHandle']
             m_body = m['Body']
             message_attribs = None
