@@ -16,6 +16,7 @@ import logging
 import os
 
 import aioboto3
+from botocore.exceptions import SSOTokenLoadError
 
 # ================
 # start class
@@ -55,14 +56,17 @@ class AsyncSqsLauncher(object):
     async def _init(self):
         if (
                 not os.environ.get('AWS_ACCOUNT_ID', None) and
-                not ((await self._session.get_credentials()).method in ['iam-role', 'assume-role',
+                not ((await self._session.get_credentials()).method in ['sso','iam-role', 'assume-role',
                                                                         'assume-role-with-web-identity'])
         ):
             raise EnvironmentError('Environment variable `AWS_ACCOUNT_ID` not set and no role found.')
 
         if not self._queue_url:
             async with self._session.client('sqs', region_name=self._region_name) as sqs:
-                queues = await sqs.list_queues(QueueNamePrefix=self._queue_name)
+                try:
+                    queues = await sqs.list_queues(QueueNamePrefix=self._queue_name)
+                except SSOTokenLoadError:
+                    raise EnvironmentError('Error loading SSO Token. Reauthenticate via aws sso login.')
                 exists = False
                 for q in queues.get('QueueUrls', []):
                     qname = q.split('/')[-1]
