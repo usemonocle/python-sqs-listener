@@ -58,7 +58,7 @@ class AsyncSqsListener(object):
         self._wait_time = kwargs.get('wait_time', 0)
         self._max_number_of_messages = kwargs.get('max_number_of_messages', 1)
         self._deserializer = kwargs.get("deserializer", json.loads)
-        self._max_parallel_semaphore = asyncio.Semaphore(1000)
+        self._max_parallel_semaphore = asyncio.Semaphore(kwargs.get('max_messages_parallelism', 1000))
 
         # must come last
         if boto3_session:
@@ -132,23 +132,26 @@ class AsyncSqsListener(object):
             yield sqs
 
     async def _start_listening(self, client):
-        # TODO consider incorporating output processing from here: https://github.com/debrouwere/sqs-antenna/blob/master/antenna/__init__.py
         while True:
-            with self._max_parallel_semaphore:
-                # calling with WaitTimeSecconds of zero show the same behavior as
-                # not specifiying a wait time, ie: short polling
-                messages = await client.receive_message(
-                    QueueUrl=self._queue_url,
-                    MessageAttributeNames=self._message_attribute_names,
-                    AttributeNames=self._attribute_names,
-                    WaitTimeSeconds=self._wait_time,
-                    MaxNumberOfMessages=self._max_number_of_messages
-                )
+            # If max parallelism is exceeded, we'll block here until we can acquire it
+            await self._max_parallel_semaphore.acquire()
+            self._max_parallel_semaphore.release()
+
+            # calling with WaitTimeSecconds of zero show the same behavior as
+            # not specifiying a wait time, ie: short polling
+            messages = await client.receive_message(
+                QueueUrl=self._queue_url,
+                MessageAttributeNames=self._message_attribute_names,
+                AttributeNames=self._attribute_names,
+                WaitTimeSeconds=self._wait_time,
+                MaxNumberOfMessages=self._max_number_of_messages
+            )
             if 'Messages' in messages:
                 sqs_logger.debug(messages)
                 sqs_logger.info("{} messages received".format(len(messages['Messages'])))
                 for m in messages['Messages']:
-                    _ = asyncio.create_task(self.process_message(m, client))
+                    task = asyncio.create_task(self.process_message(m, client))
+                    task.add_done_callback(self._handle_task_result)
             else:
                 await asyncio.sleep(self._poll_interval)
 
@@ -216,6 +219,13 @@ class AsyncSqsListener(object):
 
         sh.setFormatter(formatter)
         logger.addHandler(sh)
+
+    def _handle_task_result(self, task):
+        """This function prevents silent failure in case of uncaught exceptions in tasks"""
+        try:
+            task.result()
+        except Exception as e:
+            sqs_logger.exception("Task failed with exception: %s", e)
 
     @abstractmethod
     async def handle_message(self, body, attributes, messages_attributes):
