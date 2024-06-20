@@ -53,6 +53,9 @@ class AsyncSqsLauncher(object):
         self._visibility_timeout = visibility_timeout
         self._is_init = False
 
+        if self._region_name is None:
+            raise ValueError('Region name should be provided or inferred from boto3 session')
+
     async def _init(self):
         if (
                 not os.environ.get('AWS_ACCOUNT_ID', None) and
