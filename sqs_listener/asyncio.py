@@ -11,7 +11,7 @@ from contextlib import asynccontextmanager
 
 import aioboto3
 
-from sqs_launcher import SqsLauncher
+from sqs_launcher.asyncio import AsyncSqsLauncher
 
 # ================
 # start class
@@ -45,6 +45,7 @@ class AsyncSqsListener(object):
         self._deserializer = kwargs.get("deserializer", json.loads)
         self._max_parallel_semaphore = asyncio.Semaphore(kwargs.get('max_messages_parallelism', 1000))
         self._region_name = kwargs.get('region_name')
+        self._error_queue_launcher = None
 
     @asynccontextmanager
     async def _initialize_client(self):
@@ -185,11 +186,15 @@ class AsyncSqsListener(object):
             except Exception as ex:
                 sqs_logger.exception(ex)
                 if self._error_queue_name:
+                    if self._error_queue_launcher is None:
+                        # Note: initializing the launcher only after region name was set in _initialize_client
+                        self._error_queue_launcher = AsyncSqsLauncher(queue=self._error_queue_name,
+                                                                      create_queue=True,
+                                                                      region_name=self._region_name)
                     exc_type, exc_obj, exc_tb = sys.exc_info()
 
                     sqs_logger.info("Pushing exception to error queue")
-                    error_launcher = SqsLauncher(queue=self._error_queue_name, create_queue=True)
-                    error_launcher.launch_message(
+                    await self._error_queue_launcher.launch_message(
                         {
                             'exception_type': str(exc_type),
                             'error_message': str(ex.args)
