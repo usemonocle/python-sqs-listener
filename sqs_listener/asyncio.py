@@ -28,23 +28,8 @@ class AsyncSqsListener(object):
         :param queue: (str) name of queue to listen to
         :param kwargs: options for fine tuning. see below
         """
-        aws_access_key = kwargs.get('aws_access_key', '')
-        aws_secret_key = kwargs.get('aws_secret_key', '')
-
-        boto3_session = None
-        if len(aws_access_key) != 0 and len(aws_secret_key) != 0:
-            boto3_session = aioboto3.Session(
-                aws_access_key_id=aws_access_key,
-                aws_secret_access_key=aws_secret_key
-            )
-        else:
-            boto3_session = None
-            if (
-                    not os.environ.get('AWS_ACCOUNT_ID', None) and
-                    not (aioboto3.Session().get_credentials().method in ['iam-role', 'assume-role', 'assume-role-with-web-identity'])
-            ):
-                raise EnvironmentError('Environment variable `AWS_ACCOUNT_ID` not set and no role found.')
-
+        self._aws_access_key = kwargs.get('aws_access_key', '')
+        self._aws_secret_key = kwargs.get('aws_secret_key', '')
         self._queue_name = queue
         self._poll_interval = kwargs.get("interval", 60)
         self._queue_visibility_timeout = kwargs.get('visibility_timeout', '600')
@@ -59,16 +44,28 @@ class AsyncSqsListener(object):
         self._max_number_of_messages = kwargs.get('max_number_of_messages', 1)
         self._deserializer = kwargs.get("deserializer", json.loads)
         self._max_parallel_semaphore = asyncio.Semaphore(kwargs.get('max_messages_parallelism', 1000))
-
-        # must come last
-        if boto3_session:
-            self._session = boto3_session
-        else:
-            self._session = aioboto3.session.Session()
-        self._region_name = kwargs.get('region_name', self._session.region_name)
+        self._region_name = kwargs.get('region_name')
 
     @asynccontextmanager
     async def _initialize_client(self):
+        # First initialize boto3 session
+        if len(self._aws_access_key) != 0 and len(self._aws_secret_key) != 0:
+            self._session = aioboto3.Session(
+                aws_access_key_id=self._aws_access_key,
+                aws_secret_access_key=self._aws_secret_key
+            )
+        else:
+            self._session = aioboto3.session.Session()
+            if (
+                    not os.environ.get('AWS_ACCOUNT_ID', None) and
+                    not ((await self._session.get_credentials()).method in
+                         ['iam-role', 'assume-role', 'assume-role-with-web-identity'])
+            ):
+                raise EnvironmentError('Environment variable `AWS_ACCOUNT_ID` not set and no role found.')
+
+        if self._region_name is None:
+            self._region_name = self._session.region_name
+
         # new session for each instantiation
         ssl = True
         if self._region_name == 'elasticmq':
