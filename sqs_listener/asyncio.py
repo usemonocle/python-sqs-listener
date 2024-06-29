@@ -46,6 +46,7 @@ class AsyncSqsListener(object):
         self._max_parallel_semaphore = asyncio.Semaphore(kwargs.get('max_messages_parallelism', 1000))
         self._region_name = kwargs.get('region_name')
         self._error_queue_launcher = None
+        self._tasks = set()
 
     @asynccontextmanager
     async def _initialize_client(self):
@@ -149,7 +150,10 @@ class AsyncSqsListener(object):
                 sqs_logger.info("{} messages received".format(len(messages['Messages'])))
                 for m in messages['Messages']:
                     task = asyncio.create_task(self.process_message(m, client))
-                    task.add_done_callback(self._handle_task_result)
+                    # Asyncio tasks can be garbage collected if they don't have
+                    # a reference, so adds the task to a set.
+                    self._tasks.add(task)
+                    task.add_done_callback(self._handle_task_finish)
             else:
                 await asyncio.sleep(self._poll_interval)
 
@@ -222,12 +226,14 @@ class AsyncSqsListener(object):
         sh.setFormatter(formatter)
         logger.addHandler(sh)
 
-    def _handle_task_result(self, task):
-        """This function prevents silent failure in case of uncaught exceptions in tasks"""
+    def _handle_task_finish(self, task):
         try:
+            # Prevents silent failure in case of uncaught exceptions in tasks
             task.result()
         except Exception as e:
             sqs_logger.exception("Task failed with exception: %s", e)
+        finally:
+            self._tasks.remove(task)
 
     @abstractmethod
     async def handle_message(self, body, attributes, messages_attributes):
