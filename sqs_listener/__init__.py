@@ -75,6 +75,7 @@ class SqsListener(object):
             self._session = boto3.session.Session()
         self._region_name = kwargs.get('region_name', self._session.region_name)
         self._client = self._initialize_client()
+        self._run = True
 
     def _initialize_client(self):
         # new session for each instantiation
@@ -144,9 +145,9 @@ class SqsListener(object):
 
     def _start_listening(self):
         # TODO consider incorporating output processing from here: https://github.com/debrouwere/sqs-antenna/blob/master/antenna/__init__.py
-        while True:
-            # calling with WaitTimeSecconds of zero show the same behavior as
-            # not specifiying a wait time, ie: short polling
+        while self._run:
+            # calling with WaitTimeSeconds of zero show the same behavior as
+            # not specifying a wait time, ie: short polling
             messages = self._client.receive_message(
                 QueueUrl=self._queue_url,
                 MessageAttributeNames=self._message_attribute_names,
@@ -210,6 +211,9 @@ class SqsListener(object):
             sqs_logger.info("Using error queue " + self._error_queue_name)
 
         self._start_listening()
+
+    def stop(self):
+        self._run = False
 
     def _prepare_logger(self):
         logger = logging.getLogger('eg_daemon')

@@ -7,6 +7,7 @@ import logging
 import os
 import sys
 from abc import ABCMeta, abstractmethod
+from concurrent.futures import wait
 from contextlib import asynccontextmanager
 
 import aioboto3
@@ -43,10 +44,11 @@ class AsyncSqsListener(object):
         self._wait_time = kwargs.get('wait_time', 0)
         self._max_number_of_messages = kwargs.get('max_number_of_messages', 1)
         self._deserializer = kwargs.get("deserializer", json.loads)
-        self._max_parallel_semaphore = asyncio.Semaphore(kwargs.get('max_messages_parallelism', 1000))
+        self._max_parallel_semaphore = asyncio.Semaphore(kwargs.get('max_messages_parallelism', 200))
         self._region_name = kwargs.get('region_name')
         self._error_queue_launcher = None
         self._tasks = set()
+        self._run = True
 
     @asynccontextmanager
     async def _initialize_client(self):
@@ -131,13 +133,14 @@ class AsyncSqsListener(object):
             yield sqs
 
     async def _start_listening(self, client):
-        while True:
-            # If max parallelism is exceeded, we'll block here until we can acquire it
-            await self._max_parallel_semaphore.acquire()
-            self._max_parallel_semaphore.release()
+        while self._run:
+            # Using this structure instead of "await sema.acquire()" in order to continuously check on the _run flag
+            if self._max_parallel_semaphore.locked():
+                await asyncio.sleep(0)
+                continue
 
-            # calling with WaitTimeSecconds of zero show the same behavior as
-            # not specifiying a wait time, ie: short polling
+            # calling with WaitTimeSeconds of zero show the same behavior as
+            # not specifying a wait time, ie: short polling
             messages = await client.receive_message(
                 QueueUrl=self._queue_url,
                 MessageAttributeNames=self._message_attribute_names,
@@ -156,6 +159,9 @@ class AsyncSqsListener(object):
                     task.add_done_callback(self._handle_task_finish)
             else:
                 await asyncio.sleep(self._poll_interval)
+
+        # If we get here, we're shutting down. Wait for all tasks to finish
+        wait(self._tasks)
 
     async def process_message(self, m, client):
         async with self._max_parallel_semaphore:
@@ -212,6 +218,9 @@ class AsyncSqsListener(object):
                 sqs_logger.info("Using error queue " + self._error_queue_name)
 
             await self._start_listening(client)
+
+    def stop(self):
+        self._run = False
 
     def _prepare_logger(self):
         logger = logging.getLogger('eg_daemon')
