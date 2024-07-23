@@ -32,7 +32,7 @@ class AsyncSqsListener(object):
         self._aws_access_key = kwargs.get('aws_access_key', '')
         self._aws_secret_key = kwargs.get('aws_secret_key', '')
         self._queue_name = queue
-        self._poll_interval = kwargs.get("interval", 60)
+        self._poll_interval = kwargs.get("interval", 5)
         self._queue_visibility_timeout = kwargs.get('visibility_timeout', '600')
         self._error_queue_name = kwargs.get('error_queue', None)
         self._error_queue_visibility_timeout = kwargs.get('error_visibility_timeout', '600')
