@@ -52,6 +52,7 @@ class AsyncSqsLauncher(object):
         self._create_queue = create_queue
         self._visibility_timeout = visibility_timeout
         self._is_init = False
+        self._client = None
 
         if self._region_name is None:
             raise ValueError('Region name should be provided or inferred from boto3 session')
@@ -64,30 +65,31 @@ class AsyncSqsLauncher(object):
         ):
             raise EnvironmentError('Environment variable `AWS_ACCOUNT_ID` not set and no role found.')
 
-        if not self._queue_url:
-            async with self._session.client('sqs', region_name=self._region_name) as sqs:
-                try:
-                    queues = await sqs.list_queues(QueueNamePrefix=self._queue_name)
-                except SSOTokenLoadError:
-                    raise EnvironmentError('Error loading SSO Token. Reauthenticate via aws sso login.')
-                exists = False
-                for q in queues.get('QueueUrls', []):
-                    qname = q.split('/')[-1]
-                    if qname == self._queue_name:
-                        exists = True
-                        self._queue_url = q
+        self._client = await self._session.client('sqs', region_name=self._region_name).__aenter__()
 
-                if not exists:
-                    if self._create_queue:
-                        q = await sqs.create_queue(
-                            QueueName=self._queue_name,
-                            Attributes={
-                                'VisibilityTimeout': self._visibility_timeout
-                            }
-                        )
-                        self._queue_url = q['QueueUrl']
-                    else:
-                        raise ValueError('No queue found with name ' + self._queue_name)
+        if not self._queue_url:
+            try:
+                queues = await self._client.list_queues(QueueNamePrefix=self._queue_name)
+            except SSOTokenLoadError:
+                raise EnvironmentError('Error loading SSO Token. Reauthenticate via aws sso login.')
+            exists = False
+            for q in queues.get('QueueUrls', []):
+                qname = q.split('/')[-1]
+                if qname == self._queue_name:
+                    exists = True
+                    self._queue_url = q
+
+            if not exists:
+                if self._create_queue:
+                    q = await sqs.create_queue(
+                        QueueName=self._queue_name,
+                        Attributes={
+                            'VisibilityTimeout': self._visibility_timeout
+                        }
+                    )
+                    self._queue_url = q['QueueUrl']
+                else:
+                    raise ValueError('No queue found with name ' + self._queue_name)
         else:
             self._queue_name = self._get_queue_name_from_url(self._queue_url)
         self._is_init = True
@@ -101,14 +103,14 @@ class AsyncSqsLauncher(object):
         :return: (dict) the message response from SQS
         """
         sqs_logger.info("Sending message to queue " + self._queue_name)
-        async with self._session.client('sqs', region_name=self._region_name) as sqs:
-            if not self._is_init:
-                await self._init()
-            return await sqs.send_message(
-                QueueUrl=self._queue_url,
-                MessageBody=self._serializer(message),
-                **kwargs
-            )
+        if not self._is_init:
+            await self._init()
+
+        return await self._client.send_message(
+            QueueUrl=self._queue_url,
+            MessageBody=self._serializer(message),
+            **kwargs
+        )
 
     def _get_queue_name_from_url(self, url):
         return url.split('/')[-1]
