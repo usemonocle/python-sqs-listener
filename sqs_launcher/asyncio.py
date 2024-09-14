@@ -110,7 +110,7 @@ class AsyncSqsLauncher(object):
         # When under high load sometimes there is "NoCredentialsError"
         # The assumption is the credentials are about to expire so multiple requests tries
         # to refresh them, and then the EC2 metadata service is rate limited.
-        while tries < 3:
+        while True:
             try:
                 return await self._launch_message_single_try(message, **kwargs)
             except botocore.exceptions.NoCredentialsError:
