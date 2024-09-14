@@ -6,16 +6,18 @@ Created December 22nd, 2016
 @version: 0.9.0
 @license: Apache
 """
-
 # ================
 # start imports
 # ================
 
+import asyncio
 import json
 import logging
 import os
 
 import aioboto3
+import botocore.exceptions
+from botocore.config import Config
 from botocore.exceptions import SSOTokenLoadError
 
 # ================
@@ -57,10 +59,13 @@ class AsyncSqsLauncher(object):
             raise ValueError('Region name should be provided or inferred from boto3 session')
 
     async def _init(self):
+        creds = await self._session.get_credentials()
+        if creds is None:
+            raise botocore.exceptions.NoCredentialsError()
+
         if (
-                not os.environ.get('AWS_ACCOUNT_ID', None) and
-                not ((await self._session.get_credentials()).method in ['sso','iam-role', 'assume-role',
-                                                                        'assume-role-with-web-identity'])
+                not os.environ.get('AWS_ACCOUNT_ID') and
+                creds.method not in ['sso','iam-role', 'assume-role', 'assume-role-with-web-identity']
         ):
             raise EnvironmentError('Environment variable `AWS_ACCOUNT_ID` not set and no role found.')
 
@@ -101,9 +106,25 @@ class AsyncSqsLauncher(object):
         :return: (dict) the message response from SQS
         """
         sqs_logger.info("Sending message to queue " + self._queue_name)
-        async with self._session.client('sqs', region_name=self._region_name) as sqs:
-            if not self._is_init:
-                await self._init()
+        tries = 0
+        # When under high load sometimes there is "NoCredentialsError"
+        # The assumption is the credentials are about to expire so multiple requests tries
+        # to refresh them, and then the EC2 metadata service is rate limited.
+        while tries < 3:
+            try:
+                return await self._launch_message_single_try(message, **kwargs)
+            except botocore.exceptions.NoCredentialsError:
+                tries += 1
+                if tries > 3:
+                    raise
+                await asyncio.sleep(0)
+                sqs_logger.info("No credentials. Trying again")
+
+    async def _launch_message_single_try(self, message, **kwargs):
+        if not self._is_init:
+            await self._init()
+        async with self._session.client('sqs', region_name=self._region_name,
+                                        config=Config(retries=dict(max_attempts=400))) as sqs:
             return await sqs.send_message(
                 QueueUrl=self._queue_url,
                 MessageBody=self._serializer(message),
