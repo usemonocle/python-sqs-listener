@@ -29,9 +29,9 @@ async def run_listener():
 
 
 async def run_producer():
-    launcher = AsyncSqsLauncher('matan-test', create_queue=False, region_name='us-east-1')
+    launcher = AsyncSqsLauncher('matan-test', create_queue=True, region_name='us-east-1')
     tasks = [asyncio.create_task(launcher.launch_message(f'{{"a":"{i}"}}'))
-             for i in range(100)]
+             for i in range(1_000)]
 
     await asyncio.gather(*tasks)
 
