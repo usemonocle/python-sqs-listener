@@ -21,6 +21,7 @@ import boto3.session
 from botocore.exceptions import SSOTokenLoadError
 
 from sqs_launcher import SqsLauncher
+from sqs_listener.models import SQSHandlerResponse
 
 # ================
 # start class
@@ -183,12 +184,12 @@ class SqsListener(object):
                             )
                             self.handle_message(deserialized, message_attribs, attribs)
                         else:
-                            requeue_delay_sec = self.handle_message(deserialized, message_attribs, attribs)
-                            if requeue_delay_sec is not None and isinstance(requeue_delay_sec, int) and requeue_delay_sec > 0:
+                            response = self.handle_message(deserialized, message_attribs, attribs)
+                            if response is not None and response.requeue_delay_sec is not None:
                                 self._client.change_message_visibility(
                                     QueueUrl=self._queue_url,
                                     ReceiptHandle=receipt_handle,
-                                    VisibilityTimeout=min(requeue_delay_sec, 43_200)  # 12 hours
+                                    VisibilityTimeout=min(response.requeue_delay_sec, 43_200)  # 12 hours
                                 )
                             else:
                                 self._client.delete_message(
@@ -236,7 +237,7 @@ class SqsListener(object):
         logger.addHandler(sh)
 
     @abstractmethod
-    def handle_message(self, body, attributes, messages_attributes):
+    def handle_message(self, body, attributes, messages_attributes) -> SQSHandlerResponse | None:
         """
         Implement this method to do something with the SQS message contents
         :param body: dict
