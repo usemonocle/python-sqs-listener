@@ -13,6 +13,7 @@ from contextlib import asynccontextmanager
 import aioboto3
 
 from sqs_launcher.asyncio import AsyncSqsLauncher
+from sqs_listener.models import SQSHandlerResponse
 
 # ================
 # start class
@@ -188,9 +189,16 @@ class AsyncSqsListener(object):
                     )
                     await self.handle_message(deserialized, message_attribs, attribs)
                 else:
-                    await self.handle_message(deserialized, message_attribs, attribs)
-                    await client.delete_message(
-                        QueueUrl=self._queue_url,
+                    response = await self.handle_message(deserialized, message_attribs, attribs)
+                    if response is not None and response.requeue_delay_sec is not None:
+                        await client.change_message_visibility(
+                            QueueUrl=self._queue_url,
+                            ReceiptHandle=receipt_handle,
+                            VisibilityTimeout=min(response.requeue_delay_sec, 43_200)  # 12 hours
+                        )
+                    else:
+                        await client.delete_message(
+                            QueueUrl=self._queue_url,
                         ReceiptHandle=receipt_handle
                     )
             except Exception as ex:
@@ -245,7 +253,7 @@ class AsyncSqsListener(object):
             self._tasks.remove(task)
 
     @abstractmethod
-    async def handle_message(self, body, attributes, messages_attributes):
+    async def handle_message(self, body, attributes, messages_attributes) -> SQSHandlerResponse | None:
         """
         Implement this method to do something with the SQS message contents
         :param body: dict
