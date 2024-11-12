@@ -188,9 +188,16 @@ class AsyncSqsListener(object):
                     )
                     await self.handle_message(deserialized, message_attribs, attribs)
                 else:
-                    await self.handle_message(deserialized, message_attribs, attribs)
-                    await client.delete_message(
-                        QueueUrl=self._queue_url,
+                    requeue_delay_sec = await self.handle_message(deserialized, message_attribs, attribs)
+                    if requeue_delay_sec is not None and isinstance(requeue_delay_sec, int) and requeue_delay_sec > 0:
+                        await client.change_message_visibility(
+                            QueueUrl=self._queue_url,
+                            ReceiptHandle=receipt_handle,
+                            VisibilityTimeout=min(requeue_delay_sec, 43_200)  # 12 hours
+                        )
+                    else:
+                        await client.delete_message(
+                            QueueUrl=self._queue_url,
                         ReceiptHandle=receipt_handle
                     )
             except Exception as ex:

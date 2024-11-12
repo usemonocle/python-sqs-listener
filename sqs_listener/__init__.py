@@ -183,11 +183,18 @@ class SqsListener(object):
                             )
                             self.handle_message(deserialized, message_attribs, attribs)
                         else:
-                            self.handle_message(deserialized, message_attribs, attribs)
-                            self._client.delete_message(
-                                QueueUrl=self._queue_url,
-                                ReceiptHandle=receipt_handle
-                            )
+                            requeue_delay_sec = self.handle_message(deserialized, message_attribs, attribs)
+                            if requeue_delay_sec is not None and isinstance(requeue_delay_sec, int) and requeue_delay_sec > 0:
+                                self._client.change_message_visibility(
+                                    QueueUrl=self._queue_url,
+                                    ReceiptHandle=receipt_handle,
+                                    VisibilityTimeout=min(requeue_delay_sec, 43_200)  # 12 hours
+                                )
+                            else:
+                                self._client.delete_message(
+                                    QueueUrl=self._queue_url,
+                                    ReceiptHandle=receipt_handle
+                                )
                     except Exception as ex:
                         sqs_logger.exception(ex)
                         if self._error_queue_name:
