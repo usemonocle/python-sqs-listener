@@ -161,6 +161,7 @@ class SqsListener(object):
                 sqs_logger.debug(messages)
                 sqs_logger.info("{} messages received".format(len(messages['Messages'])))
                 for m in messages['Messages']:
+                    start_time = time.time()
                     receipt_handle = m['ReceiptHandle']
                     m_body = m['Body']
                     message_attribs = None
@@ -196,8 +197,9 @@ class SqsListener(object):
                                     QueueUrl=self._queue_url,
                                     ReceiptHandle=receipt_handle
                                 )
+                        duration = time.time() - start_time
+                        sqs_logger.info(f'Finish [QUEUE={self._queue_name}] [PROCESS_TIME={duration}s]')
                     except Exception as ex:
-                        sqs_logger.exception(ex)
                         if self._error_queue_name:
                             exc_type, exc_obj, exc_tb = sys.exc_info()
 
@@ -209,6 +211,8 @@ class SqsListener(object):
                                     'error_message': str(ex.args)
                                 }
                             )
+                        duration = time.time() - start_time
+                        sqs_logger.exception(f'Finish [QUEUE={self._queue_name}] [PROCESS_TIME={duration}s]')
 
             else:
                 time.sleep(self._poll_interval)
