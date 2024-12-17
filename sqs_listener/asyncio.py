@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import sys
+import time
 from abc import ABCMeta, abstractmethod
 from contextlib import asynccontextmanager
 
@@ -135,8 +136,8 @@ class AsyncSqsListener(object):
     async def _start_listening(self, client):
         try:
             while self._run:
-                # Using this structure instead of "await sema.acquire()" in order to continuously check on the _run flag
-                if self._max_parallel_semaphore.locked():
+                # Does not read more messages until there is enough room for batch size to be processed
+                if self._max_parallel_semaphore._value < self._max_number_of_messages:
                     await asyncio.sleep(0)
                     continue
 
@@ -169,6 +170,7 @@ class AsyncSqsListener(object):
 
 
     async def process_message(self, m, client):
+        start_time = time.time()
         async with self._max_parallel_semaphore:
             receipt_handle = m['ReceiptHandle']
             m_body = m['Body']
@@ -205,8 +207,9 @@ class AsyncSqsListener(object):
                             QueueUrl=self._queue_url,
                         ReceiptHandle=receipt_handle
                     )
+                duration = time.time() - start_time
+                sqs_logger.info(f'Finish [QUEUE={self._queue_name}] [PROCESS_TIME={duration}s]')
             except Exception as ex:
-                sqs_logger.exception(ex)
                 if self._error_queue_name:
                     if self._error_queue_launcher is None:
                         # Note: initializing the launcher only after region name was set in _initialize_client
@@ -222,6 +225,8 @@ class AsyncSqsListener(object):
                             'error_message': str(ex.args)
                         }
                     )
+                duration = time.time() - start_time
+                sqs_logger.exception(f'Finish [QUEUE={self._queue_name}] [PROCESS_TIME={duration}s]')
 
     async def listen(self):
         async with self._initialize_client() as client:
