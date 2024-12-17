@@ -7,7 +7,6 @@ import logging
 import os
 import sys
 from abc import ABCMeta, abstractmethod
-from concurrent.futures import wait
 from contextlib import asynccontextmanager
 
 import aioboto3
@@ -134,35 +133,40 @@ class AsyncSqsListener(object):
             yield sqs
 
     async def _start_listening(self, client):
-        while self._run:
-            # Using this structure instead of "await sema.acquire()" in order to continuously check on the _run flag
-            if self._max_parallel_semaphore.locked():
-                await asyncio.sleep(0)
-                continue
+        try:
+            while self._run:
+                # Using this structure instead of "await sema.acquire()" in order to continuously check on the _run flag
+                if self._max_parallel_semaphore.locked():
+                    await asyncio.sleep(0)
+                    continue
 
-            # calling with WaitTimeSeconds of zero show the same behavior as
-            # not specifying a wait time, ie: short polling
-            messages = await client.receive_message(
-                QueueUrl=self._queue_url,
-                MessageAttributeNames=self._message_attribute_names,
-                AttributeNames=self._attribute_names,
-                WaitTimeSeconds=self._wait_time,
-                MaxNumberOfMessages=self._max_number_of_messages
-            )
-            if 'Messages' in messages:
-                sqs_logger.debug(messages)
-                sqs_logger.info("{} messages received".format(len(messages['Messages'])))
-                for m in messages['Messages']:
-                    task = asyncio.create_task(self.process_message(m, client))
-                    # Asyncio tasks can be garbage collected if they don't have
-                    # a reference, so adds the task to a set.
-                    self._tasks.add(task)
-                    task.add_done_callback(self._handle_task_finish)
-            else:
-                await asyncio.sleep(self._poll_interval)
+                # calling with WaitTimeSeconds of zero show the same behavior as
+                # not specifying a wait time, ie: short polling
+                messages = await client.receive_message(
+                    QueueUrl=self._queue_url,
+                    MessageAttributeNames=self._message_attribute_names,
+                    AttributeNames=self._attribute_names,
+                    WaitTimeSeconds=self._wait_time,
+                    MaxNumberOfMessages=self._max_number_of_messages
+                )
+                if 'Messages' in messages:
+                    sqs_logger.debug(messages)
+                    sqs_logger.info("{} messages received".format(len(messages['Messages'])))
+                    for m in messages['Messages']:
+                        task = asyncio.create_task(self.process_message(m, client))
+                        # Asyncio tasks can be garbage collected if they don't have
+                        # a reference, so adds the task to a set.
+                        self._tasks.add(task)
+                        task.add_done_callback(self._handle_task_finish)
+                else:
+                    await asyncio.sleep(self._poll_interval)
+        finally:
+            # Ensure all tasks are completed before exiting
+            if self._tasks:
+                sqs_logger.info("Waiting for pending tasks to complete...")
+                await asyncio.wait(self._tasks)
+            sqs_logger.info("All tasks completed. Exiting listener.")
 
-        # If we get here, we're shutting down. Wait for all tasks to finish
-        wait(self._tasks)
 
     async def process_message(self, m, client):
         async with self._max_parallel_semaphore:
