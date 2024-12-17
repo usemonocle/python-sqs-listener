@@ -135,8 +135,8 @@ class AsyncSqsListener(object):
     async def _start_listening(self, client):
         try:
             while self._run:
-                # Using this structure instead of "await sema.acquire()" in order to continuously check on the _run flag
-                if self._max_parallel_semaphore.locked():
+                # Does not read more messages until there is enough room for batch size to be processed
+                if self._max_parallel_semaphore._value < self._max_number_of_messages:
                     await asyncio.sleep(0)
                     continue
 
