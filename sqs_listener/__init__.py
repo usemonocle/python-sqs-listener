@@ -179,7 +179,7 @@ class SqsListener(object):
                         attribs = m['Attributes']
                     try:
                         if self._force_delete:
-                            self._retry_delete_message(receipt_handle)
+                            self._delete_message_with_retry(receipt_handle)
                             self.handle_message(deserialized, message_attribs, attribs)
                         else:
                             response = self.handle_message(deserialized, message_attribs, attribs)
@@ -190,7 +190,7 @@ class SqsListener(object):
                                     VisibilityTimeout=min(response.requeue_delay_sec, 43_200)  # 12 hours
                                 )
                             else:
-                                self._retry_delete_message(receipt_handle)
+                                self._delete_message_with_retry(receipt_handle)
                         duration = time.time() * 1000 - start_time_ms
                         sqs_logger.info(f'Finish [QUEUE={self._queue_name}] [STATUS={OK_STATUS}] [PROCESS_TIME={duration:.2f}ms]')
                     except Exception as ex:
@@ -245,7 +245,7 @@ class SqsListener(object):
         """
         return
     
-    def _retry_delete_message(self, receipt_handle):
+    def _delete_message_with_retry(self, receipt_handle):
         retry_count = 0
         while retry_count < 3:
             try:
