@@ -205,7 +205,7 @@ class AsyncSqsListener(object):
                 sqs_logger.info(f'Finish [QUEUE={self._queue_name}] [STATUS={OK_STATUS}] [PROCESS_TIME={duration:.2f}ms]')
             except Exception as ex:
                 exc_type, exc_obj, exc_tb = sys.exc_info()
-                sqs_logger.error(f"Error processing SQS message, error type: {exc_type}, error args: {str(ex.args)}.original message: {m_body}")
+                sqs_logger.exception(f"Error processing SQS message, error type: {exc_type}, error args: {str(ex.args)}.original message: {m_body}")
                 if self._error_queue_name:
                     if self._error_queue_launcher is None:
                         # Note: initializing the launcher only after region name was set in _initialize_client
