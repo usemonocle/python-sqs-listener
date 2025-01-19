@@ -189,7 +189,7 @@ class AsyncSqsListener(object):
                 attribs = m['Attributes']
             try:
                 if self._force_delete:
-                    await self._delete_message_with_retry(receipt_handle)
+                    await self._delete_message_with_retry(client, receipt_handle)
                     await self.handle_message(deserialized, message_attribs, attribs)
                 else:
                     response = await self.handle_message(deserialized, message_attribs, attribs)
@@ -200,7 +200,7 @@ class AsyncSqsListener(object):
                             VisibilityTimeout=min(response.requeue_delay_sec, 43_200)  # 12 hours
                         )
                     else:
-                        await self._delete_message_with_retry(receipt_handle)
+                        await self._delete_message_with_retry(client, receipt_handle)
                 duration = time.time() * 1000 - start_time_ms
                 sqs_logger.info(f'Finish [QUEUE={self._queue_name}] [STATUS={OK_STATUS}] [PROCESS_TIME={duration:.2f}ms]')
             except Exception as ex:
@@ -247,11 +247,11 @@ class AsyncSqsListener(object):
         sh.setFormatter(formatter)
         logger.addHandler(sh)
 
-    async def _delete_message_with_retry(self, receipt_handle):
+    async def _delete_message_with_retry(self, sqs_client, receipt_handle):
         retry_count = 0
         while retry_count < 3:
             try:
-                await self._client.delete_message(
+                await sqs_client.delete_message(
                     QueueUrl=self._queue_url,
                     ReceiptHandle=receipt_handle
                 )
