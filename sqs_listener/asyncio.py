@@ -9,6 +9,8 @@ import sys
 import time
 from abc import ABCMeta, abstractmethod
 from contextlib import asynccontextmanager
+from functools import partial
+from typing import Callable, Awaitable
 
 import aioboto3
 
@@ -177,6 +179,8 @@ class AsyncSqsListener(object):
             message_attribs = None
             attribs = None
 
+            change_message_visibility = partial(self.change_visibility, client, receipt_handle)
+
             try:
                 deserialized = self._deserializer(m_body)
             except:
@@ -193,15 +197,11 @@ class AsyncSqsListener(object):
                         QueueUrl=self._queue_url,
                         ReceiptHandle=receipt_handle
                     )
-                    await self.handle_message(deserialized, message_attribs, attribs)
+                    await self.handle_message(deserialized, message_attribs, attribs, change_message_visibility)
                 else:
-                    response = await self.handle_message(deserialized, message_attribs, attribs)
+                    response = await self.handle_message(deserialized, message_attribs, attribs, change_message_visibility)
                     if response is not None and response.requeue_delay_sec is not None:
-                        await client.change_message_visibility(
-                            QueueUrl=self._queue_url,
-                            ReceiptHandle=receipt_handle,
-                            VisibilityTimeout=min(response.requeue_delay_sec, 43_200)  # 12 hours
-                        )
+                        await change_message_visibility(response.requeue_delay_sec)
                     else:
                         await client.delete_message(
                             QueueUrl=self._queue_url,
@@ -261,13 +261,22 @@ class AsyncSqsListener(object):
         finally:
             self._tasks.remove(task)
 
+    async def change_visibility(self, client, receipt_handle, visibility_timeout):
+        await client.change_message_visibility(
+            QueueUrl=self._queue_url,
+            ReceiptHandle=receipt_handle,
+            VisibilityTimeout=min(visibility_timeout, 43_200)  # 12 hours
+        )
+
     @abstractmethod
-    async def handle_message(self, body, attributes, messages_attributes) -> SQSHandlerResponse | None:
+    async def handle_message(self, body, attributes, messages_attributes,
+                             change_message_visibility: Callable[[int], Awaitable[None]],) -> SQSHandlerResponse | None:
         """
         Implement this method to do something with the SQS message contents
         :param body: dict
         :param attributes: dict
         :param messages_attributes: dict
+        :param change_message_visibility: Callable
         :return:
         """
         return
