@@ -15,7 +15,7 @@ from typing import Callable, Awaitable
 import aioboto3
 
 from sqs_launcher.asyncio import AsyncSqsLauncher
-from sqs_listener.models import SQSHandlerResponse
+from sqs_listener.models import ERROR_STATUS, OK_STATUS, SQSHandlerResponse
 
 # ================
 # start class
@@ -172,7 +172,7 @@ class AsyncSqsListener(object):
 
 
     async def process_message(self, m, client):
-        start_time = time.time()
+        start_time_ms = time.time() * 1000
         async with self._max_parallel_semaphore:
             receipt_handle = m['ReceiptHandle']
             m_body = m['Body']
@@ -184,7 +184,7 @@ class AsyncSqsListener(object):
             try:
                 deserialized = self._deserializer(m_body)
             except:
-                sqs_logger.exception("Unable to parse message")
+                sqs_logger.exception(f"Unable to parse message. original message: {m_body}")
                 return
 
             if 'MessageAttributes' in m:
@@ -193,31 +193,25 @@ class AsyncSqsListener(object):
                 attribs = m['Attributes']
             try:
                 if self._force_delete:
-                    await client.delete_message(
-                        QueueUrl=self._queue_url,
-                        ReceiptHandle=receipt_handle
-                    )
+                    await self._delete_message_with_retry(client, receipt_handle)
                     await self.handle_message(deserialized, message_attribs, attribs, change_message_visibility)
                 else:
                     response = await self.handle_message(deserialized, message_attribs, attribs, change_message_visibility)
                     if response is not None and response.requeue_delay_sec is not None:
                         await change_message_visibility(response.requeue_delay_sec)
                     else:
-                        await client.delete_message(
-                            QueueUrl=self._queue_url,
-                        ReceiptHandle=receipt_handle
-                    )
-                duration = time.time() - start_time
-                sqs_logger.info(f'Finish [QUEUE={self._queue_name}] [PROCESS_TIME={duration}s]')
+                        await self._delete_message_with_retry(client, receipt_handle)
+                duration = time.time() * 1000 - start_time_ms
+                sqs_logger.info(f'Finish [QUEUE={self._queue_name}] [STATUS={OK_STATUS}] [PROCESS_TIME={duration:.2f}ms]')
             except Exception as ex:
+                exc_type, exc_obj, exc_tb = sys.exc_info()
+                sqs_logger.exception(f"Error processing SQS message, error type: {exc_type}, error args: {str(ex.args)}.original message: {m_body}")
                 if self._error_queue_name:
                     if self._error_queue_launcher is None:
                         # Note: initializing the launcher only after region name was set in _initialize_client
                         self._error_queue_launcher = AsyncSqsLauncher(queue=self._error_queue_name,
                                                                       create_queue=True,
                                                                       region_name=self._region_name)
-                    exc_type, exc_obj, exc_tb = sys.exc_info()
-
                     sqs_logger.info("Pushing exception to error queue")
                     await self._error_queue_launcher.launch_message(
                         {
@@ -225,8 +219,9 @@ class AsyncSqsListener(object):
                             'error_message': str(ex.args)
                         }
                     )
-                duration = time.time() - start_time
-                sqs_logger.exception(f'Finish [QUEUE={self._queue_name}] [PROCESS_TIME={duration}s]')
+                duration = time.time() * 1000 - start_time_ms
+                sqs_logger.info(
+                    f'Finish [QUEUE={self._queue_name}] [STATUS={ERROR_STATUS}] [PROCESS_TIME={duration:.2f}ms]')
 
     async def listen(self):
         async with self._initialize_client() as client:
@@ -251,6 +246,21 @@ class AsyncSqsListener(object):
 
         sh.setFormatter(formatter)
         logger.addHandler(sh)
+
+    async def _delete_message_with_retry(self, sqs_client, receipt_handle):
+        retry_count = 0
+        while retry_count < 3:
+            try:
+                await sqs_client.delete_message(
+                    QueueUrl=self._queue_url,
+                    ReceiptHandle=receipt_handle
+                )
+                break
+            except Exception as e:
+                if retry_count == 2:
+                    raise e
+                retry_count += 1
+                await asyncio.sleep(1)
 
     def _handle_task_finish(self, task):
         try:
