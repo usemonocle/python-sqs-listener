@@ -7,6 +7,7 @@ pulls the package's own dependencies, so a bare checkout needs those installed p
 import pytest
 
 from sqs_listener.log_redaction import format_failure
+from sqs_listener.log_redaction import MAX_CHAIN_LINKS
 from sqs_listener.log_redaction import UNKNOWN_MESSAGE_ID
 
 SECRET = 'shopper@redaction-probe.test'
@@ -93,6 +94,24 @@ def test_a_suppressed_context_is_not_walked():
     assert 'RuntimeError' in rendered
     assert 'VendorError' not in rendered
     assert SECRET not in rendered
+
+
+def test_a_deep_chain_is_truncated_rather_than_replayed_in_full():
+    deep = _raised(VendorError(f'GET ...?email={SECRET}'))
+    for step in range(20):
+        try:
+            raise RuntimeError(f'layer {step}') from deep
+        except RuntimeError as caught:
+            deep = caught
+
+    rendered = format_failure(QUEUE, MESSAGE_ID, deep)
+
+    assert SECRET not in rendered
+    assert rendered.count('caused by ') == MAX_CHAIN_LINKS - 1
+    assert f'... chain truncated at {MAX_CHAIN_LINKS} links' in rendered
+    # The outermost link is the one the consumer actually raised, so it is never the one dropped.
+    assert 'layer 19' not in rendered
+    assert 'RuntimeError' in rendered
 
 
 def test_a_cycle_in_the_chain_terminates():

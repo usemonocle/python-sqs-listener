@@ -11,6 +11,10 @@ import traceback
 
 UNKNOWN_MESSAGE_ID = 'unknown'
 
+# A wrapper, an adapter, a client and a transport around the root failure is the realistic
+# depth; beyond that a chain is re-inflating the log surface this renderer exists to shrink.
+MAX_CHAIN_LINKS = 5
+
 
 def format_failure(queue_name, message_id, exc):
     """Render an operational failure description that carries no message content."""
@@ -19,12 +23,19 @@ def format_failure(queue_name, message_id, exc):
         f'[MESSAGE_ID={message_id or UNKNOWN_MESSAGE_ID}] '
         f'[ERROR_TYPE={_type_name(exc)}]',
     ]
-    for depth, link in enumerate(_chain(exc)):
+    links = []
+    for link in _chain(exc):
+        links.append(link)
+        if len(links) > MAX_CHAIN_LINKS:
+            break
+    for depth, link in enumerate(links[:MAX_CHAIN_LINKS]):
         if depth:
             lines.append(f'caused by {_type_name(link)}')
         frames = ''.join(traceback.format_tb(link.__traceback__)).rstrip('\n')
         if frames:
             lines.append(frames)
+    if len(links) > MAX_CHAIN_LINKS:
+        lines.append(f'... chain truncated at {MAX_CHAIN_LINKS} links')
     return '\n'.join(lines)
 
 
