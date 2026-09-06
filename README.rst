@@ -12,7 +12,7 @@ AWS SQS Listener
 
 
 This package takes care of the boilerplate involved in listening to an SQS
-queue, as well as sending messages to a queue.  Works with python 2.7 & 3.6+.
+queue, as well as sending messages to a queue.  Requires python 3.10+.
 
 Installation
 ~~~~~~~~~~~~

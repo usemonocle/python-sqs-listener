@@ -13,6 +13,8 @@ from contextlib import asynccontextmanager
 import aioboto3
 
 from sqs_launcher.asyncio import AsyncSqsLauncher
+from sqs_listener.log_redaction import format_failure
+from sqs_listener.log_redaction import UNKNOWN_MESSAGE_ID
 from sqs_listener.models import ERROR_STATUS, OK_STATUS, SQSHandlerResponse
 
 # ================
@@ -151,10 +153,12 @@ class AsyncSqsListener(object):
                     MaxNumberOfMessages=self._max_number_of_messages
                 )
                 if 'Messages' in messages:
-                    sqs_logger.debug(messages)
+                    sqs_logger.debug("Received message ids: %s",
+                                     [msg.get('MessageId') for msg in messages['Messages']])
                     sqs_logger.info("{} messages received".format(len(messages['Messages'])))
                     for m in messages['Messages']:
-                        task = asyncio.create_task(self.process_message(m, client))
+                        task = asyncio.create_task(self.process_message(m, client),
+                                                   name=m.get('MessageId') or UNKNOWN_MESSAGE_ID)
                         # Asyncio tasks can be garbage collected if they don't have
                         # a reference, so adds the task to a set.
                         self._tasks.add(task)
@@ -174,13 +178,15 @@ class AsyncSqsListener(object):
         async with self._max_parallel_semaphore:
             receipt_handle = m['ReceiptHandle']
             m_body = m['Body']
+            message_id = m.get('MessageId')
             message_attribs = None
             attribs = None
 
             try:
                 deserialized = self._deserializer(m_body)
             except:
-                sqs_logger.exception(f"Unable to parse message. original message: {m_body}")
+                sqs_logger.error("Unable to parse message %s",
+                                 format_failure(self._queue_name, message_id, sys.exc_info()[1]))
                 return
 
             if 'MessageAttributes' in m:
@@ -204,8 +210,9 @@ class AsyncSqsListener(object):
                 duration = time.time() * 1000 - start_time_ms
                 sqs_logger.info(f'Finish [QUEUE={self._queue_name}] [STATUS={OK_STATUS}] [PROCESS_TIME={duration:.2f}ms]')
             except Exception as ex:
-                exc_type, exc_obj, exc_tb = sys.exc_info()
-                sqs_logger.exception(f"Error processing SQS message, error type: {exc_type}, error args: {str(ex.args)}.original message: {m_body}")
+                exc_type = sys.exc_info()[0]
+                sqs_logger.error("Error processing SQS message %s",
+                                 format_failure(self._queue_name, message_id, ex))
                 if self._error_queue_name:
                     if self._error_queue_launcher is None:
                         # Note: initializing the launcher only after region name was set in _initialize_client
@@ -266,8 +273,9 @@ class AsyncSqsListener(object):
         try:
             # Prevents silent failure in case of uncaught exceptions in tasks
             task.result()
-        except Exception as e:
-            sqs_logger.exception("Task failed with exception: %s", e)
+        except Exception as exc:
+            sqs_logger.error("Task failed %s",
+                             format_failure(self._queue_name, task.get_name(), exc))
         finally:
             self._tasks.remove(task)
 

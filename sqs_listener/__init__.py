@@ -21,6 +21,7 @@ import boto3.session
 from botocore.exceptions import SSOTokenLoadError
 
 from sqs_launcher import SqsLauncher
+from sqs_listener.log_redaction import format_failure
 from sqs_listener.models import ERROR_STATUS, OK_STATUS, SQSHandlerResponse
 
 # ================
@@ -158,19 +159,22 @@ class SqsListener(object):
             )
             if 'Messages' in messages:
 
-                sqs_logger.debug(messages)
+                sqs_logger.debug("Received message ids: %s",
+                                 [msg.get('MessageId') for msg in messages['Messages']])
                 sqs_logger.info("{} messages received".format(len(messages['Messages'])))
                 for m in messages['Messages']:
                     start_time_ms = time.time() * 1000
                     receipt_handle = m['ReceiptHandle']
                     m_body = m['Body']
+                    message_id = m.get('MessageId')
                     message_attribs = None
                     attribs = None
 
                     try:
                         deserialized = self._deserializer(m_body)
                     except:
-                        sqs_logger.exception(f"Unable to parse message. original message: {m_body}")
+                        sqs_logger.error("Unable to parse message %s",
+                                         format_failure(self._queue_name, message_id, sys.exc_info()[1]))
                         continue
 
                     if 'MessageAttributes' in m:
@@ -194,8 +198,9 @@ class SqsListener(object):
                         duration = time.time() * 1000 - start_time_ms
                         sqs_logger.info(f'Finish [QUEUE={self._queue_name}] [STATUS={OK_STATUS}] [PROCESS_TIME={duration:.2f}ms]')
                     except Exception as ex:
-                        exc_type, exc_obj, exc_tb = sys.exc_info()
-                        sqs_logger.exception(f"Error processing SQS message, error type: {exc_type}, error args: {str(ex.args)}.original message: {m_body}")
+                        exc_type = sys.exc_info()[0]
+                        sqs_logger.error("Error processing SQS message %s",
+                                         format_failure(self._queue_name, message_id, ex))
                         if self._error_queue_name:
                             sqs_logger.info("Pushing exception to error queue")
                             error_launcher = SqsLauncher(queue=self._error_queue_name, create_queue=True)
