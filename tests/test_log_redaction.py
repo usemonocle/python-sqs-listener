@@ -1,6 +1,7 @@
 """The redaction boundary: what `format_failure` is allowed to put in a log line.
 
-Stdlib only, so this runs on a bare checkout with nothing but pytest installed.
+The module under test imports nothing but `traceback`; importing it through the package
+pulls the package's own dependencies, so a bare checkout needs those installed plus pytest.
 """
 
 import pytest
@@ -56,11 +57,11 @@ def test_a_wrapper_does_not_hide_the_cause():
     assert SECRET not in rendered
     assert 'RuntimeError' in rendered
     assert 'VendorError' in rendered
-    # The wrapper's own frames name the wrapper, not the call that actually failed.
+    # `in _raised` is the CAUSE's own frame: the wrapper's frames alone would not name it.
     assert 'in _raised' in rendered
 
 
-def test_a_context_chain_is_walked_and_a_suppressed_one_is_not():
+def test_an_implicit_context_is_walked():
     try:
         try:
             raise VendorError(f'GET ...?email={SECRET}')
@@ -69,8 +70,29 @@ def test_a_context_chain_is_walked_and_a_suppressed_one_is_not():
     except RuntimeError as caught:
         implicit = caught
 
-    assert 'VendorError' in format_failure(QUEUE, MESSAGE_ID, implicit)
-    assert 'VendorError' not in format_failure(QUEUE, MESSAGE_ID, _raised(RuntimeError('alone')))
+    rendered = format_failure(QUEUE, MESSAGE_ID, implicit)
+
+    assert SECRET not in rendered
+    assert 'VendorError' in rendered
+
+
+def test_a_suppressed_context_is_not_walked():
+    try:
+        try:
+            raise VendorError(f'GET ...?email={SECRET}')
+        except VendorError:
+            raise RuntimeError('handled, context suppressed') from None
+    except RuntimeError as caught:
+        suppressed = caught
+
+    # `from None` leaves __context__ set and only flips __suppress_context__, so a walk that
+    # ignored the flag would still reach VendorError here.
+    assert suppressed.__context__ is not None
+    rendered = format_failure(QUEUE, MESSAGE_ID, suppressed)
+
+    assert 'RuntimeError' in rendered
+    assert 'VendorError' not in rendered
+    assert SECRET not in rendered
 
 
 def test_a_cycle_in_the_chain_terminates():
