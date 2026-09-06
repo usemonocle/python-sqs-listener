@@ -13,6 +13,9 @@ from sqs_listener.log_redaction import UNKNOWN_MESSAGE_ID
 SECRET = 'shopper@redaction-probe.test'
 QUEUE = 'probe-queue'
 MESSAGE_ID = 'probe-message-id'
+# Passed as a variable, never written as a literal at a `raise`: rendered frames carry each
+# frame's SOURCE text, so a literal in the raising line would appear whatever the renderer does.
+OUTERMOST_MESSAGE = 'consumer-raised-value'
 
 
 class VendorError(Exception):
@@ -23,6 +26,14 @@ def _raised(exc):
     try:
         raise exc
     except type(exc) as caught:
+        return caught
+
+
+def _outermost_wrap(cause, message):
+    """The last wrap, in a frame of its own, so truncation can be checked from which end."""
+    try:
+        raise RuntimeError(message) from cause
+    except RuntimeError as caught:
         return caught
 
 
@@ -103,15 +114,18 @@ def test_a_deep_chain_is_truncated_rather_than_replayed_in_full():
             raise RuntimeError(f'layer {step}') from deep
         except RuntimeError as caught:
             deep = caught
+    deep = _outermost_wrap(deep, OUTERMOST_MESSAGE)
 
     rendered = format_failure(QUEUE, MESSAGE_ID, deep)
 
     assert SECRET not in rendered
     assert rendered.count('caused by ') == MAX_CHAIN_LINKS - 1
     assert f'... chain truncated at {MAX_CHAIN_LINKS} links' in rendered
-    # The outermost link is the one the consumer actually raised, so it is never the one dropped.
+    # Truncation drops the far end, so the link the consumer raised survives it...
+    assert 'in _outermost_wrap' in rendered
+    # ...while its message, like every other link's, is not rendered.
+    assert OUTERMOST_MESSAGE not in rendered
     assert 'layer 19' not in rendered
-    assert 'RuntimeError' in rendered
 
 
 def test_a_cycle_in_the_chain_terminates():
