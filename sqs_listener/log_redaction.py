@@ -1,10 +1,10 @@
 """Failure rendering for listener logs that cannot replay the message payload.
 
-The SQS body is customer data and the exception's own text is not safe either:
-``httpx.HTTPStatusError.__str__`` embeds the request URL, and vendor profile lookups
-filter by the shopper's email or phone. So a failure is described by exception class,
-SQS message id, queue name and traceback FRAMES only -- never the body, never the
-exception value, never ``exc_info``.
+The SQS body is customer data, and an exception's own text is not safe either: a client
+library builds its message out of the request it made, so a failed vendor call carries the
+request URL and its query string. A failure is therefore described by exception CLASS, SQS
+message id, queue name and traceback FRAMES only -- never the body, never an exception
+value, never ``exc_info``.
 """
 
 import traceback
@@ -12,12 +12,37 @@ import traceback
 UNKNOWN_MESSAGE_ID = 'unknown'
 
 
-def format_failure(queue_name, message_id, exc_type, exc_tb):
+def format_failure(queue_name, message_id, exc):
     """Render an operational failure description that carries no message content."""
-    error_type = getattr(exc_type, '__name__', None) or str(exc_type)
-    frames = ''.join(traceback.format_tb(exc_tb)) if exc_tb is not None else ''
-    return (
+    lines = [
         f'[QUEUE={queue_name}] '
         f'[MESSAGE_ID={message_id or UNKNOWN_MESSAGE_ID}] '
-        f'[ERROR_TYPE={error_type}]\n{frames}'
-    )
+        f'[ERROR_TYPE={_type_name(exc)}]',
+    ]
+    for depth, link in enumerate(_chain(exc)):
+        if depth:
+            lines.append(f'caused by {_type_name(link)}')
+        frames = ''.join(traceback.format_tb(link.__traceback__)).rstrip('\n')
+        if frames:
+            lines.append(frames)
+    return '\n'.join(lines)
+
+
+def _type_name(exc):
+    cls = exc if isinstance(exc, type) else type(exc)
+    module = getattr(cls, '__module__', None)
+    return cls.__name__ if module in (None, 'builtins') else f'{module}.{cls.__name__}'
+
+
+def _chain(exc):
+    """Walk __cause__/__context__ as the interpreter does; a wrapper alone names no frames."""
+    seen = set()
+    while isinstance(exc, BaseException) and id(exc) not in seen:
+        seen.add(id(exc))
+        yield exc
+        if exc.__cause__ is not None:
+            exc = exc.__cause__
+        elif exc.__suppress_context__:
+            exc = None
+        else:
+            exc = exc.__context__
