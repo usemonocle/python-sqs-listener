@@ -15,7 +15,7 @@ setup(
     # Versions should comply with PEP440.  For a discussion on single-sourcing
     # the version across setup.py and the project code, see
     # https://packaging.python.org/en/latest/single_source_version.html
-    version='0.9.0',
+    version='0.10.0',
 
     description='A simple Python SQS utility package',
     long_description=long_description,
@@ -45,11 +45,12 @@ setup(
         # Pick your license as you wish (should match "license" above)
         'License :: OSI Approved :: Apache Software License',
 
-        # Specify the Python versions you support here. In particular, ensure
-        # that you indicate whether you support Python 2, Python 3 or both.
-        'Programming Language :: Python :: 2.7',
-        'Programming Language :: Python :: 3.6',
+        # `sqs_listener.asyncio` annotates `SQSHandlerResponse | None` without postponed
+        # annotations, so the package does not import below 3.10.
+        'Programming Language :: Python :: 3.10',
     ],
+
+    python_requires='>=3.10',
 
     # What does your project relate to?
     keywords='aws sqs listener and message launcher',
