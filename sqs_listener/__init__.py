@@ -21,7 +21,7 @@ import boto3.session
 from botocore.exceptions import SSOTokenLoadError
 
 from sqs_launcher import SqsLauncher
-from sqs_listener.log_redaction import format_failure
+from sqs_listener.log_redaction import failure_log_args
 from sqs_listener.models import ERROR_STATUS, OK_STATUS, SQSHandlerResponse
 
 # ================
@@ -173,8 +173,8 @@ class SqsListener(object):
                     try:
                         deserialized = self._deserializer(m_body)
                     except:
-                        sqs_logger.error("Unable to parse message %s",
-                                         format_failure(self._queue_name, message_id, sys.exc_info()[1]))
+                        sqs_logger.error(*failure_log_args("Unable to parse message",
+                                                                self._queue_name, message_id, sys.exc_info()[1]))
                         continue
 
                     if 'MessageAttributes' in m:
@@ -199,8 +199,8 @@ class SqsListener(object):
                         sqs_logger.info(f'Finish [QUEUE={self._queue_name}] [STATUS={OK_STATUS}] [PROCESS_TIME={duration:.2f}ms]')
                     except Exception as ex:
                         exc_type = sys.exc_info()[0]
-                        sqs_logger.error("Error processing SQS message %s",
-                                         format_failure(self._queue_name, message_id, ex))
+                        sqs_logger.error(*failure_log_args("Error processing SQS message",
+                                                                self._queue_name, message_id, ex))
                         if self._error_queue_name:
                             sqs_logger.info("Pushing exception to error queue")
                             error_launcher = SqsLauncher(queue=self._error_queue_name, create_queue=True)

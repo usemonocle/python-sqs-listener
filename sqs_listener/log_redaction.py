@@ -16,13 +16,19 @@ UNKNOWN_MESSAGE_ID = 'unknown'
 MAX_CHAIN_LINKS = 5
 
 
-def format_failure(queue_name, message_id, exc):
-    """Render an operational failure description that carries no message content."""
-    lines = [
-        f'[QUEUE={queue_name}] '
-        f'[MESSAGE_ID={message_id or UNKNOWN_MESSAGE_ID}] '
-        f'[ERROR_TYPE={_type_name(exc)}]',
-    ]
+def failure_log_args(event, queue_name, message_id, exc):
+    """Return the positional arguments for ``logger.error`` describing a failure without its content.
+
+    Aggregators group a log event by its unformatted template, so the template carries the
+    event, queue and exception class, and the per-message id and frames ride as arguments.
+    """
+    template = (f'{event} [QUEUE={_literal(queue_name)}] [MESSAGE_ID=%s] '
+                f'[ERROR_TYPE={_literal(_type_name(exc))}]%s')
+    return template, message_id or UNKNOWN_MESSAGE_ID, _render_chain(exc)
+
+
+def _render_chain(exc):
+    lines = []
     links = []
     for link in _chain(exc):
         links.append(link)
@@ -36,7 +42,11 @@ def format_failure(queue_name, message_id, exc):
             lines.append(frames)
     if len(links) > MAX_CHAIN_LINKS:
         lines.append(f'... chain truncated at {MAX_CHAIN_LINKS} links')
-    return '\n'.join(lines)
+    return ''.join(f'\n{line}' for line in lines)
+
+
+def _literal(text):
+    return str(text).replace('%', '%%')
 
 
 def _type_name(exc):

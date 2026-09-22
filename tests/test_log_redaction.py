@@ -1,4 +1,4 @@
-"""The redaction boundary: what `format_failure` is allowed to put in a log line.
+"""The redaction boundary: what `failure_log_args` is allowed to put in a log line.
 
 The module under test imports nothing but `traceback`; importing it through the package
 pulls the package's own dependencies, so a bare checkout needs those installed plus pytest.
@@ -6,7 +6,7 @@ pulls the package's own dependencies, so a bare checkout needs those installed p
 
 import pytest
 
-from sqs_listener.log_redaction import format_failure
+from sqs_listener.log_redaction import failure_log_args
 from sqs_listener.log_redaction import MAX_CHAIN_LINKS
 from sqs_listener.log_redaction import UNKNOWN_MESSAGE_ID
 
@@ -16,6 +16,11 @@ MESSAGE_ID = 'probe-message-id'
 # Passed as a variable, never written as a literal at a `raise`: rendered frames carry each
 # frame's SOURCE text, so a literal in the raising line would appear whatever the renderer does.
 OUTERMOST_MESSAGE = 'consumer-raised-value'
+
+
+def format_failure(queue_name, message_id, exc):
+    template, *args = failure_log_args('Failed', queue_name, message_id, exc)
+    return template % tuple(args)
 
 
 class VendorError(Exception):
@@ -143,3 +148,9 @@ def test_a_class_or_an_instance_both_render_a_class_name(passed):
 
     assert SECRET not in rendered
     assert 'VendorError' in rendered
+
+
+def test_a_percent_sign_in_the_queue_name_cannot_break_formatting():
+    rendered = format_failure('queue-100%', MESSAGE_ID, _raised(VendorError('boom')))
+
+    assert '[QUEUE=queue-100%]' in rendered
